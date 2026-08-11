@@ -1,0 +1,23 @@
+[project]
+name = "herrgotts-h3-infinite-continuation-suite"
+version = "1.2.0"
+description = "Keyframe-anchored MiniMax H3 long-video continuation for ComfyUI with direct AV-latent handover, freeze-safe phase alignment, Safe Tail Bridge, and seamless stitching"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "HerrgottMargott" }
+]
+keywords = ["ComfyUI", "MiniMax", "H3", "video", "continuation", "latent", "audio", "stitching"]
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3"
+]
+
+[project.urls]
+Repository = "https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite"
+Documentation = "https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite#readme"
+"Bug Tracker" = "https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite/issues"
+
+[tool.comfy]
+PublisherId = "herrgottmargott"
+DisplayName = "Herrgotts-H3-Infinite-Continuation-Suite"
