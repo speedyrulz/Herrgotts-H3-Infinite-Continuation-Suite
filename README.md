@@ -66,7 +66,7 @@ For a general Ref2VA graph another chaining pack may be a better fit. Herrgotts-
 
 ### ComfyUI Manager / Registry
 
-Once published, search for **Herrgotts-H3-Infinite-Continuation-Suite** in ComfyUI Manager and install it normally.
+Search for **Herrgotts-H3-Infinite-Continuation-Suite** in ComfyUI Manager and install.
 
 ### Manual installation
 
