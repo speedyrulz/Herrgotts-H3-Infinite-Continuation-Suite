@@ -31,6 +31,25 @@ The goal is therefore **not just to make a clip longer**. It is to preserve moti
 - A **memory-bounded Saved Chain Stitcher** for long projects generated clip by clip.
 - Lazy, marker-gated H3 runtime hooks that are installed only when continuation is actually used.
 
+## Example Generation
+
+▶ **[Watch the 7-clip / ~61-second example generation](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite/releases/download/v1.2.0/h3-infinite-7-clip-example.mp4)**
+
+This example was generated as seven separate FL2VA segments and stitched automatically with the included Saved Chain workflow.
+
+Tested settings:
+
+- 7 chained H3 segments
+- FL2VA First/Last-Frame keyframe workflow
+- `Balanced` Auto Handover
+- `context_frames = 22`
+- Safe Tail Bridge: `2` frames
+- Video crossfade: `4` frames
+- Audio de-click crossfade: `15 ms`
+- Boundary luminance matching: Off
+
+No manual editing was performed at the six clip boundaries. I've removed a few seconds of nonsense speach at the end since I was too lazy to regenerate. 
+
 ### How this differs from other H3 chaining tools
 
 Latent-based H3 chaining is not unique to this project. Other community tools, including [ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context), also continue H3 motion/audio context directly.
