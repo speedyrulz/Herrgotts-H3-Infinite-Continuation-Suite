@@ -17,20 +17,6 @@ This suite keeps a short section of the previous clip directly in H3's **video +
 
 The goal is therefore **not just to make a clip longer**. It is to preserve motion/audio continuity while repeatedly getting the quality reset and creative control of new FL2VA keyframe anchors.
 
-### Main features
-
-- Direct **video + audio latent continuation** without decode/re-encode handover.
-- Repeated **Last Frame keyframe anchors** for visual control and quality resets.
-- **Auto Handover** that detects the frozen FL2VA tail instead of using a fixed trim.
-- **Phase-aligned context** to avoid startup flicker from invalid H3 latent cut positions.
-- **No-Lock Fallback** when no final freeze is detected.
-- **Safe Tail Bridge:** rendered frames lost only because of latent phase alignment can replace the first 1–2 potentially unstable video frames of the next clip.
-- Short context-aligned **video crossfade** and independently tested **15 ms audio de-click crossfade**.
-- `Full`, `Stitch Ready` and `Final Clip` output modes.
-- Save / Load complete AV latents with stitch metadata.
-- A **memory-bounded Saved Chain Stitcher** for long projects generated clip by clip.
-- Lazy, marker-gated H3 runtime hooks that are installed only when continuation is actually used.
-
 ## Example Generation
 
 ▶ **[Watch the 7-clip / ~61-second example generation](https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite/releases/download/v1.2.0/h3-infinite-7-clip-example.mp4)**
@@ -50,6 +36,24 @@ Tested settings:
 
 No manual editing was performed at the six clip boundaries. I've removed a few seconds of nonsense speach at the end since I was too lazy to regenerate. 
 
+If the suite works well for you, example videos are very welcome. Open a GitHub Issue with a short description of the settings/workflow and a link to the result. With permission, good examples can be added to the GitHub showcase with credit.
+
+Bug reports are equally useful. Please include the relevant console log and, when possible, the workflow JSON.
+
+## Main features
+
+- Direct **video + audio latent continuation** without decode/re-encode handover.
+- Repeated **Last Frame keyframe anchors** for visual control and quality resets.
+- **Auto Handover** that detects the frozen FL2VA tail instead of using a fixed trim.
+- **Phase-aligned context** to avoid startup flicker from invalid H3 latent cut positions.
+- **No-Lock Fallback** when no final freeze is detected.
+- **Safe Tail Bridge:** rendered frames lost only because of latent phase alignment can replace the first 1–2 potentially unstable video frames of the next clip.
+- Short context-aligned **video crossfade** and independently tested **15 ms audio de-click crossfade**.
+- `Full`, `Stitch Ready` and `Final Clip` output modes.
+- Save / Load complete AV latents with stitch metadata.
+- A **memory-bounded Saved Chain Stitcher** for long projects generated clip by clip.
+- Lazy, marker-gated H3 runtime hooks that are installed only when continuation is actually used.
+
 ### How this differs from other H3 chaining tools
 
 Latent-based H3 chaining is not unique to this project. Other community tools, including [ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context), also continue H3 motion/audio context directly.
@@ -57,6 +61,28 @@ Latent-based H3 chaining is not unique to this project. Other community tools, i
 This suite specifically focuses on **freeze-aware, keyframe-anchored FL2VA chains**: every segment can have a new visual endpoint, the frozen FL2VA tail is analyzed automatically, the handover is moved to a valid H3 phase, and the same metadata is reused for stitching.
 
 For a general Ref2VA graph another chaining pack may be a better fit. Herrgotts-H3-Infinite-Continuation-Suite is aimed at users who specifically want **latent continuity + repeated FL2VA keyframe control + automatic freeze-safe stitching**.
+
+## Installation
+
+### ComfyUI Manager / Registry
+
+Once published, search for **Herrgotts-H3-Infinite-Continuation-Suite** in ComfyUI Manager and install it normally.
+
+### Manual installation
+
+From `ComfyUI/custom_nodes`:
+
+```bash
+git clone https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite.git
+```
+
+Restart ComfyUI and reload the browser UI.
+
+### Optional SageAttention / KJNodes
+
+The supplied generation workflows include **Patch Sage Attention KJ** as an optional optimization. Install [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) plus a compatible SageAttention setup if you want to use it.
+
+SageAttention is **not required** for continuation. If it causes instability or OOMs in your setup, disable/bypass it.
 
 ## Usage
 
@@ -135,45 +161,6 @@ The phase-aligned latent cutoff sometimes has to stop **1–3 rendered frames be
 With the default `max_safe_tail_bridge_frames = 2`, the stitcher keeps up to two of those exact frames from the previous clip and skips the same number of early **video** frames in the next clip. It never moves beyond the detector's safe endpoint and does not change total duration.
 
 Audio is intentionally **not shifted** by the bridge. It keeps the tested 15 ms de-click transition on the original audio timeline.
-
-## Installation
-
-### ComfyUI Manager / Registry
-
-Once published, search for **Herrgotts-H3-Infinite-Continuation-Suite** in ComfyUI Manager and install it normally.
-
-### Manual installation
-
-From `ComfyUI/custom_nodes`:
-
-```bash
-git clone https://github.com/HerrgottMargott/Herrgotts-H3-Infinite-Continuation-Suite.git
-```
-
-Restart ComfyUI and reload the browser UI.
-
-### MiniMax H3 files
-
-The repository does **not** include model weights. The included workflows use the normal ComfyUI MiniMax H3 setup, including:
-
-- `minimax_h3_fl2va_pruned_int8_convrot.safetensors`
-- `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`
-- `minimax_h3_video_vae_fp16.safetensors`
-- `minimax_h3_audio_vae_fp32.safetensors`
-
-See the official [MiniMax H3 ComfyUI guide](https://docs.comfy.org/tutorials/video/minimax/minimax-h3) and [Comfy-Org MiniMax-H3 model repository](https://huggingface.co/Comfy-Org/MiniMax-H3).
-
-### Optional SageAttention / KJNodes
-
-The supplied generation workflows include **Patch Sage Attention KJ** as an optional optimization. Install [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) plus a compatible SageAttention setup if you want to use it.
-
-SageAttention is **not required** for continuation. If it causes instability or OOMs in your setup, disable/bypass it.
-
-## Examples
-
-If the suite works well for you, example videos are very welcome. Open a GitHub Issue with a short description of the settings/workflow and a link to the result. With permission, good examples can be added to the GitHub showcase with credit.
-
-Bug reports are equally useful. Please include the relevant console log and, when possible, the workflow JSON.
 
 ## Limitations / Known Issues
 
