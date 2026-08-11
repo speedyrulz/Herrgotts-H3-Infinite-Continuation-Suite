@@ -243,7 +243,7 @@ def install_layout_patch():
     mm.PackedLayout.__init__ = patched_init
     _APPLIED = True
     _LOG.info(
-        "h3_continuous v1.2.0: lazy, marker-gated H3 layout patch installed on first continuation use"
+        "h3_continuous v1.2.1: lazy, marker-gated H3 layout patch installed on first continuation use"
     )
     return True
 

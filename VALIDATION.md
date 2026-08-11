@@ -1,4 +1,4 @@
-# v1.2.0 validation notes
+# v1.2.1 validation notes
 
 ## Automated validation
 
@@ -15,7 +15,7 @@ The release regression suite covers:
 - Safe Tail Bridge eligibility, safety-cap behavior and unchanged final timeline duration.
 - Example-workflow model/VAE wiring and release seam defaults.
 
-Current v1.2.0 release-candidate result: **66/66 regression tests passing**.
+Current v1.2.1 release-candidate result: **68/68 regression tests passing**.
 
 Run from the repository root:
 
@@ -34,19 +34,25 @@ python -m pytest -q
 - A 4-frame video crossfade reduced the visible seam but left a small brightness change. Increasing it to 8 frames only spread that change over a longer interval.
 - Boundary luminance matching successfully measured the decode-to-decode brightness difference, but live frame inspection showed that fading the gain could turn the seam into a visible brightness drift. It is therefore retained only as an experimental fallback and disabled by default in v1.2.
 
-## v1.2 change requiring final live smoke test
+## v1.2 live Safe Tail Bridge validation
 
-v1.2 replaces brightness correction as the default video-seam strategy with **Safe Tail Bridge**:
+A seven-clip Saved Chain Stitching run completed successfully with:
 
-1. take only rendered frames between the phase-aligned latent cutoff and the detector's already-safe ideal end,
-2. keep at most two of them from the previous clip,
-3. skip the same number of early video frames in the next clip,
-4. keep audio on the original timeline with the already-tested 15 ms de-click crossfade.
+- **1467 video frames @ 24 fps** = 61.125 s.
+- **1,956,000 audio samples @ 32,000 Hz** = 61.125 s.
+- **A/V sample rounding delta 0**.
+- Safe Tail Bridge `2` frames at all six continuation joins.
+- Video crossfade `4` frames, audio de-click crossfade `15 ms`, boundary luminance matching off.
+- Subjective result reported as **very good**; a few isolated slightly brighter frames remained but were barely noticeable.
 
-Before tagging v1.2.0, live-test at least one saved chain where `phase_aligned_cutoff_loss_frames` is 1–3 and verify:
+This validates the release-default Safe Tail Bridge timeline behavior across a longer seven-segment chain.
 
-- the log reports `bridge-in` / `bridge-out` values as expected,
-- the visible 1–2 frame seam is reduced or removed,
-- A/V sample rounding delta remains 0,
-- audio remains identical to the already successful 15 ms result,
-- no detector safety-margin frames are reintroduced.
+## v1.2.1 Manager metadata hotfix
+
+The v1.2.1 patch adds two redundant identification paths for ComfyUI Manager:
+
+1. `node_list.json` explicitly lists every registered node class.
+2. Every suite node in every shipped workflow contains the Registry package ID `herrgotts-h3-infinite-continuation-suite`, version `1.2.1`, and an exact `Node name for S&R` matching its workflow node type.
+
+No generation, freeze-detection, continuation, stitching or runtime-patch logic changed in v1.2.1.
+

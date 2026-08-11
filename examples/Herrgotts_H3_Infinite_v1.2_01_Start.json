@@ -326,7 +326,9 @@
       ],
       "title": "H3 Infinite v1.2 - Native FFLF Start",
       "properties": {
-        "Node name for S&R": "H3ContinuousStartV1"
+        "Node name for S&R": "H3ContinuousStartV11",
+        "cnr_id": "herrgotts-h3-infinite-continuation-suite",
+        "ver": "1.2.1"
       },
       "widgets_values": [
         "Prompt",
@@ -859,7 +861,9 @@
       ],
       "title": "SAVE Clip 1 AV Latent + Robust Handover Metadata",
       "properties": {
-        "Node name for S&R": "H3ContinuousSaveLatent"
+        "Node name for S&R": "H3ContinuousSaveLatent",
+        "cnr_id": "herrgotts-h3-infinite-continuation-suite",
+        "ver": "1.2.1"
       },
       "widgets_values": [
         "h3_continuous/clip",
@@ -934,7 +938,9 @@
       ],
       "title": "AUTO Handover v1.2 — Balanced",
       "properties": {
-        "Node name for S&R": "H3ContinuousAnalyzeHandoverV1"
+        "Node name for S&R": "H3ContinuousAnalyzeHandoverV11",
+        "cnr_id": "herrgotts-h3-infinite-continuation-suite",
+        "ver": "1.2.1"
       },
       "widgets_values": [
         "Balanced",
@@ -1023,7 +1029,9 @@
       ],
       "title": "Output / Stitch v1.2",
       "properties": {
-        "Node name for S&R": "H3ContinuousStitchOutputV1"
+        "Node name for S&R": "H3ContinuousStitchOutputV11",
+        "cnr_id": "herrgotts-h3-infinite-continuation-suite",
+        "ver": "1.2.1"
       },
       "widgets_values": [
         "Full"

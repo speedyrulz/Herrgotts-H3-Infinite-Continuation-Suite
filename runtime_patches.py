@@ -64,6 +64,6 @@ def ensure_h3_runtime_patches():
             raise RuntimeError("h3_continuous: runtime hooks did not reach a consistent active state")
 
         _LOG.info(
-            "h3_continuous v1.2.0: H3 runtime hooks ready; unrelated H3 graphs remain on stock behavior"
+            "h3_continuous v1.2.1: H3 runtime hooks ready; unrelated H3 graphs remain on stock behavior"
         )
         return True

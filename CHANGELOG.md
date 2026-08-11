@@ -2,6 +2,11 @@
 
 Only major user-facing or technically important milestones are listed here. Experimental micro-iterations are intentionally omitted.
 
+## 1.2.1 — ComfyUI Manager integration hotfix
+
+- Added explicit `node_list.json` coverage for all registered suite nodes.
+- Embedded `cnr_id = herrgotts-h3-infinite-continuation-suite` and `ver = 1.2.1` into every suite node in all four shipped workflows, and normalized `Node name for S&R` to the actual registered node type. This improves **Check Missing Custom Nodes / Install Missing Custom Nodes** identification without changing generation or stitching behavior.
+
 ## 1.2.0 — First public release candidate
 
 - Added **Safe Tail Bridge** for video seams. When phase alignment forces the latent handover 1–3 frames before Auto Handover's already-safe ideal endpoint, the stitcher can keep up to **2** of those exact rendered frames from the previous clip and skip the same number of early video frames in the next clip. The detector safety margin and total timeline length remain unchanged.

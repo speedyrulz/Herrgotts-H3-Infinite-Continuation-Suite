@@ -461,7 +461,7 @@ class H3ContinuousSaveLatent:
         head_context_frames = max(0, int(head_context_frames or 0))
         metadata = {
             "format": "h3_continuous_av_v8",
-            "release_version": "1.2.0",
+            "release_version": "1.2.1",
             "fps": str(FPS),
             "frame_count": str(frame_count),
             "clip_index": str(int(clip_index)),
@@ -1224,7 +1224,7 @@ class H3ContinuousAnalyzeHandoverV11(H3ContinuousAnalyzeHandoverV1):
             result, freeze_hold=effective["freeze_hold"], context_frames=context_frames
         )
         result["release_preset"] = preset_id
-        result["release_version"] = "1.2.0"
+        result["release_version"] = "1.2.1"
         result["version"] = max(int(result.get("version", 0)), 10)
         status = _format_handover_status_v11(result)
         label = {"balanced": "Balanced", "motion_safe": "Motion Safe", "custom": "Custom"}[preset_id]
@@ -1659,7 +1659,7 @@ class H3ContinuousStitchSavedChainV11:
                         raise ValueError(f"Saved Chain Stitch currently supports mono/stereo audio, got {channels} channels")
                     layout = "mono" if channels == 1 else "stereo"
                     output = av.open(out_path, mode="w", options={"movflags": "use_metadata_tags+faststart"})
-                    output.metadata["herrgotts_h3_infinite_version"] = "1.2.0"
+                    output.metadata["herrgotts_h3_infinite_version"] = "1.2.1"
                     output.metadata["clip_range"] = f"{first}-{last}"
                     output.metadata["video_crossfade_frames"] = str(requested_vfade)
                     output.metadata["audio_crossfade_ms"] = str(requested_afade_ms)

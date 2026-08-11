@@ -109,3 +109,49 @@ def test_saved_chain_and_showcase_document_safe_tail_bridge_and_audio_defaults()
         assert "15 ms" in lower
         assert "luminance" in lower
         assert "off" in lower
+
+
+def test_all_suite_nodes_embed_registry_metadata_for_missing_node_resolution():
+    registry_id = "herrgotts-h3-infinite-continuation-suite"
+    node_list = json.loads((ROOT / "node_list.json").read_text(encoding="utf-8"))
+    suite_types = set(node_list)
+    seen = set()
+    for path, workflow in _load_examples():
+        for node in workflow.get("nodes", []):
+            node_type = node.get("type")
+            if node_type not in suite_types:
+                continue
+            seen.add(node_type)
+            props = node.get("properties") or {}
+            assert props.get("cnr_id") == registry_id, (path.name, node_type, props)
+            assert props.get("ver") == "1.2.1", (path.name, node_type, props)
+            assert props.get("Node name for S&R") == node_type, (path.name, node_type, props)
+    # Every release-facing/persistence node used by the shipped workflows should be covered.
+    expected_used = {
+        "H3ContinuousStartV11",
+        "H3ContinuousContinueV11",
+        "H3ContinuousAnalyzeHandoverV11",
+        "H3ContinuousStitchOutputV11",
+        "H3ContinuousSeamlessJoinV11",
+        "H3ContinuousStitchSavedChainV11",
+        "H3ContinuousSaveLatent",
+        "H3ContinuousLoadLatent",
+    }
+    assert expected_used <= seen
+
+
+def test_node_list_matches_all_registered_node_class_mapping_keys():
+    import ast
+
+    tree = ast.parse((ROOT / "nodes.py").read_text(encoding="utf-8"))
+    mapping_keys = None
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == "NODE_CLASS_MAPPINGS" for target in statement.targets):
+            assert isinstance(statement.value, ast.Dict)
+            mapping_keys = {key.value for key in statement.value.keys if isinstance(key, ast.Constant)}
+            break
+    assert mapping_keys is not None
+    node_list = json.loads((ROOT / "node_list.json").read_text(encoding="utf-8"))
+    assert set(node_list) == mapping_keys
