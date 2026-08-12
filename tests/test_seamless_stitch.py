@@ -66,6 +66,24 @@ def test_clip_one_head_is_always_zero():
     assert resolve_saved_head_context({"head_context_frames": "99"}, 1, None)[0] == 0
 
 
+def test_saved_zero_head_for_continuation_clip_falls_back_to_previous_handover():
+    # A stored 0 for clip 2+ means actual_head_context_frames was never
+    # connected at save time; silently keeping the duplicated context head
+    # would replay ~1s at the stitched seam.
+    head, source = resolve_saved_head_context(
+        {"head_context_frames": "0"}, 3, {"phase_aligned_context_frames": 22}
+    )
+    assert head == 22
+    assert "previous handover" in source
+
+
+def test_saved_zero_head_without_fallback_raises_actionable_error():
+    import pytest
+
+    with pytest.raises(ValueError, match="actual_head_context_frames"):
+        resolve_saved_head_context({"head_context_frames": "0"}, 3, None)
+
+
 def test_luminance_gain_estimator_matches_and_clamps_global_brightness_offset():
     from seamless_stitch import estimate_luminance_gain
 

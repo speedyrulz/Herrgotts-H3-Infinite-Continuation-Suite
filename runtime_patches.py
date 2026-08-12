@@ -4,6 +4,7 @@ import logging
 import threading
 
 from . import patch_layout, patch_payload
+from .release_utils import RELEASE_VERSION
 
 _LOG = logging.getLogger("h3_continuous")
 _LOCK = threading.RLock()
@@ -21,7 +22,18 @@ def ensure_h3_runtime_patches():
     """Ensure both hooks are active, but never wrap a foreign H3 patch."""
     with _LOCK:
         if patch_layout.is_applied() and patch_payload.is_applied():
-            return True
+            # Trust the flags only if the LIVE callables still carry our hooks;
+            # a ComfyUI module reload or another pack replacing them wholesale
+            # must trigger re-validation instead of silently sampling marked
+            # continuations through stock code.
+            live_layout, _ = patch_layout.get_layout_patch_status()
+            live_payload, _ = patch_payload.get_payload_patch_status()
+            if (live_layout is not None and live_layout.state == "ours"
+                    and live_payload is not None and live_payload.state == "ours"):
+                return True
+            _LOG.warning(
+                "h3_continuous: H3 runtime hook state lost since installation; re-validating"
+            )
 
         layout_status, layout_err = patch_layout.get_layout_patch_status()
         payload_status, payload_err = patch_payload.get_payload_patch_status()
@@ -64,6 +76,7 @@ def ensure_h3_runtime_patches():
             raise RuntimeError("h3_continuous: runtime hooks did not reach a consistent active state")
 
         _LOG.info(
-            "h3_continuous v1.2.1: H3 runtime hooks ready; unrelated H3 graphs remain on stock behavior"
+            "h3_continuous v%s: H3 runtime hooks ready; unrelated H3 graphs remain on stock behavior",
+            RELEASE_VERSION,
         )
         return True

@@ -239,6 +239,61 @@ def test_v046_calibrated_defaults_still_reject_serious_continuous_motion():
     assert r["landing_tail_frames"] == 0
 
 
+def test_backward_expansion_survives_outlier_on_the_window_head():
+    # True lock spans the analysis-window start (default window 72 -> start
+    # frame 171) and the frame exactly at the window head is a tolerated
+    # shimmer outlier. Expansion must still trigger so the reported lock start
+    # is the real frame 160, not the window edge.
+    frames, lock_start = 243, 160
+    h, w = 48, 64
+    x = torch.full((frames, h, w, 3), 0.25)
+    for t in range(lock_start):
+        left = (t * 3) % 44
+        x[t, 16:32, left:left + 8] = 0.75
+    final = torch.full((h, w, 3), 0.25)
+    final[16:32, 50:58] = 0.75
+    x[lock_start:] = final
+    # Global +0.02 shimmer: fails the 0.0120 final-mean gate for this single
+    # frame while staying below the 0.025 per-pixel active threshold.
+    x[171] = (final + 0.02).clamp(0, 1)
+
+    r = analyze_freeze_tail(x)
+    assert r["freeze_detected"] is True
+    assert r["freeze_start_frame"] == 160
+    assert r["trailing_locked_frames"] == 83
+
+
+def test_configured_short_freeze_hold_detects_short_lock():
+    # freeze_hold=4 with a 6-frame lock: the median reference must shrink with
+    # freeze_hold (2*hold-1) or the pre-lock majority poisons the reference and
+    # the configured setting can never fire.
+    r = analyze_freeze_tail(moving_bar_clip(lock_start=237), freeze_hold=4)
+    assert r["freeze_detected"] is True
+    assert r["freeze_start_frame"] == 237
+    assert r["final_reference_frames"] == 7
+
+
+def test_non_h3_frame_count_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="17k\\+5"):
+        analyze_freeze_tail(moving_bar_clip(frames=241, lock_start=220))
+
+
+def test_early_freeze_overlapping_context_is_flagged():
+    # Lock at frame 4: the clamped context window [0..21] consists of frozen
+    # frames. The result must say so instead of looking like a safe handover.
+    r = analyze_freeze_tail(moving_bar_clip(lock_start=4))
+    assert r["freeze_detected"] is True
+    assert r["context_contains_locked_frames"] is True
+
+
+def test_normal_lock_does_not_flag_context_overlap():
+    r = analyze_freeze_tail(moving_bar_clip(lock_start=221))
+    assert r["freeze_detected"] is True
+    assert r["context_contains_locked_frames"] is False
+
+
 def test_v046_default_configuration_is_calibrated_safe_early():
     r = analyze_freeze_tail(stable_tail_with_last_frame_outlier())
     assert r["freeze_hold"] == 12

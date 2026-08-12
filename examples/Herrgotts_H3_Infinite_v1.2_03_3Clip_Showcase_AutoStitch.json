@@ -2534,8 +2534,7 @@
         "Node name for S&R": "CreateVideo"
       },
       "widgets_values": [
-        24,
-        8
+        24
       ],
       "title": "FINAL — Create Stitched Video"
     },

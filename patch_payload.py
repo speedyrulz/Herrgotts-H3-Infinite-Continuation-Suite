@@ -5,10 +5,12 @@ import logging
 
 from .patch_layout import HC_INDEX, HC_AUDIO_END_FRAME
 from .patch_utils import classify_callable
+from .release_utils import RELEASE_VERSION
 
 PAYLOAD_PATCH_MARKER = "_herrgotts_h3_infinite_payload_patch"
 _LOG = logging.getLogger("h3_continuous")
 _ORIGINAL_EXTRA_CONDS = None
+_INSTALLED_WRAPPER = None
 _APPLIED = False
 _MODEL_BASE = None
 
@@ -72,9 +74,20 @@ def _validate_live_extra_conds(fn):
 
 
 def install_payload_patch():
-    global _ORIGINAL_EXTRA_CONDS, _APPLIED, _MODEL_BASE
+    global _ORIGINAL_EXTRA_CONDS, _INSTALLED_WRAPPER, _APPLIED, _MODEL_BASE
     if _APPLIED:
-        return True
+        # Verify against the LIVE callable so a module reload or wholesale
+        # replacement by another pack is not masked by a stale in-process flag.
+        status, _ = get_payload_patch_status()
+        if status is not None and status.state == "ours":
+            return True
+        _LOG.warning(
+            "h3_continuous: payload hook state lost (model_base reloaded or replaced); re-validating"
+        )
+        _ORIGINAL_EXTRA_CONDS = None
+        _INSTALLED_WRAPPER = None
+        _MODEL_BASE = None
+        _APPLIED = False
 
     status, err = get_payload_patch_status()
     if status is None:
@@ -94,19 +107,20 @@ def install_payload_patch():
 
     model_base = _import_model_base()
     cls = model_base.MiniMaxH3
-    _ORIGINAL_EXTRA_CONDS = cls.extra_conds
+    original_extra_conds = cls.extra_conds
     try:
-        _validate_live_extra_conds(_ORIGINAL_EXTRA_CONDS)
+        _validate_live_extra_conds(original_extra_conds)
     except Exception as exc:
         _LOG.error(
             "h3_continuous: live ComfyUI payload compatibility check FAILED (%s). "
             "No payload patch was installed.", exc,
         )
-        _ORIGINAL_EXTRA_CONDS = None
         return False
 
     def patched_extra_conds(self, **kwargs):
-        out = _ORIGINAL_EXTRA_CONDS(self, **kwargs)
+        # Closure-captured original: an in-flight or orphaned wrapper call must
+        # never depend on module globals that a later rollback nulls out.
+        out = original_extra_conds(self, **kwargs)
         keyframes = kwargs.get("minimax_keyframes")
         refs = kwargs.get("minimax_refs")
         if not keyframes or not refs:
@@ -119,25 +133,34 @@ def install_payload_patch():
 
     setattr(patched_extra_conds, PAYLOAD_PATCH_MARKER, True)
     cls.extra_conds = patched_extra_conds
+    _ORIGINAL_EXTRA_CONDS = original_extra_conds
+    _INSTALLED_WRAPPER = patched_extra_conds
     _MODEL_BASE = model_base
     _APPLIED = True
     _LOG.info(
-        "h3_continuous v1.2.1: lazy, marker-gated H3 payload patch installed on first continuation use"
+        "h3_continuous v%s: lazy, marker-gated H3 payload patch installed on first continuation use",
+        RELEASE_VERSION,
     )
     return True
 
 
 def uninstall_payload_patch_if_owned():
     """Best-effort rollback used only if paired patch installation fails."""
-    global _ORIGINAL_EXTRA_CONDS, _APPLIED, _MODEL_BASE
-    if _MODEL_BASE is None or _ORIGINAL_EXTRA_CONDS is None:
+    global _ORIGINAL_EXTRA_CONDS, _INSTALLED_WRAPPER, _APPLIED, _MODEL_BASE
+    if _MODEL_BASE is None or _ORIGINAL_EXTRA_CONDS is None or _INSTALLED_WRAPPER is None:
         return False
     cls = getattr(_MODEL_BASE, "MiniMaxH3", None)
     current = getattr(cls, "extra_conds", None) if cls is not None else None
-    if current is None or not getattr(current, PAYLOAD_PATCH_MARKER, False):
+    if current is not _INSTALLED_WRAPPER:
+        # Someone layered/replaced the callable after us; restoring the original
+        # here would rip their hook out along with ours.
+        _LOG.warning(
+            "h3_continuous: payload hook is no longer the wrapper this suite installed; leaving it untouched"
+        )
         return False
     cls.extra_conds = _ORIGINAL_EXTRA_CONDS
     _ORIGINAL_EXTRA_CONDS = None
+    _INSTALLED_WRAPPER = None
     _MODEL_BASE = None
     _APPLIED = False
     _LOG.info("h3_continuous: rolled back Herrgotts H3 payload patch")

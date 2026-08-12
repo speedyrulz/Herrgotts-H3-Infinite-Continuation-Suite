@@ -27,9 +27,9 @@ import torch
 import torch.nn.functional as F
 
 try:
-    from .latent_math import video_latent_t, phase_aware_context_slice, phase_aligned_extended_context_slice, snap_landing_tail
+    from .latent_math import pixel_frames, video_latent_t, phase_aware_context_slice, phase_aligned_extended_context_slice, snap_landing_tail
 except ImportError:  # direct test import from the package directory
-    from latent_math import video_latent_t, phase_aware_context_slice, phase_aligned_extended_context_slice, snap_landing_tail
+    from latent_math import pixel_frames, video_latent_t, phase_aware_context_slice, phase_aligned_extended_context_slice, snap_landing_tail
 
 
 def _target_hw(height: int, width: int, max_edge: int):
@@ -189,6 +189,14 @@ def analyze_freeze_tail(
     n = int(images.shape[0])
     if n < 2:
         raise ValueError("Need at least two frames for handover analysis")
+    if pixel_frames(video_latent_t(n)) != n:
+        # All latent-boundary metadata below assumes H3's 17k+5 pixel grid.
+        # A trimmed/stitched frame count would silently produce inconsistent
+        # handover_end_frame vs landing_tail_frames values.
+        raise ValueError(
+            f"analyze_freeze_tail: {n} frames is not a valid H3 clip length (17k+5 grid); "
+            "connect the FULL decoded render of the accepted clip, not a trimmed output"
+        )
 
     analysis_window = max(2, min(n, int(analysis_window)))
     freeze_hold = max(2, int(freeze_hold))
@@ -201,6 +209,11 @@ def analyze_freeze_tail(
     min_final_match_ratio = max(0.0, min(1.0, float(min_final_match_percent) / 100.0))
     max_consecutive_final_outliers = max(0, int(max_consecutive_final_outliers))
     final_reference_frames = max(1, int(final_reference_frames))
+    # The pixel-wise median reference only represents the locked state when the
+    # lock dominates the reference window (lock length >= (ref+1)/2). Cap the
+    # reference length so a configured freeze_hold below 8 stays detectable;
+    # all defaults/presets (freeze_hold >= 8, ref 15) are unchanged by this.
+    final_reference_frames = min(final_reference_frames, 2 * freeze_hold - 1)
     safety_mode = str(safety_mode).strip().lower()
     if safety_mode not in ("fixed", "adaptive"):
         raise ValueError(f"Unknown safety_mode {safety_mode!r}; expected 'fixed' or 'adaptive'")
@@ -345,7 +358,13 @@ def analyze_freeze_tail(
 
     # If the requested analysis window already begins inside a stable final-state
     # consensus, expand backward so the true lock start is not clipped by window.
-    if start > 0 and primary_gate(stats, 0)["passed"]:
+    # A tolerated shimmer outlier sitting exactly on the window head must not
+    # block expansion, so a detected lock touching the head (within the outlier
+    # streak allowance) also triggers the full re-scan.
+    window_head_locked = primary_gate(stats, 0)["passed"] or (
+        lock_start_idx is not None and lock_start_idx <= max_consecutive_final_outliers
+    )
+    if start > 0 and window_head_locked:
         start = 0
         stats = compute_stats(start)
         lock_start_idx, primary_gate_info, primary_candidate_idx, gate = find_lock(stats)
@@ -426,6 +445,16 @@ def analyze_freeze_tail(
         n, phase_aware_target_end_frame, ideal_handover_end_frame, context_frames
     )
 
+    # Degenerate early-freeze case: when the lock starts before context_frames +
+    # safety, the clamps above force locked frames into the recommended context.
+    # Surface that explicitly so workflows can regenerate instead of chaining a
+    # frozen history forward.
+    context_contains_locked_frames = bool(
+        freeze_detected
+        and freeze_start_frame >= 0
+        and int(snapped["handover_end_frame"]) >= int(freeze_start_frame)
+    )
+
     result = {
         "available": True,
         "version": 9,
@@ -445,6 +474,7 @@ def analyze_freeze_tail(
         "freeze_hold": freeze_hold,
         "safety_margin": safety_margin,
         "safety_mode": safety_mode,
+        "context_contains_locked_frames": context_contains_locked_frames,
         "ideal_handover_end_frame": int(ideal_handover_end_frame),
         "phase_aware_target_end_frame": int(phase_aware_target_end_frame),
         "phase_aware_effective_safety_margin": int(phase_aware_safety_margin),

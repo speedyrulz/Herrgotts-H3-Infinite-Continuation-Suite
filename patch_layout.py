@@ -6,9 +6,11 @@ wrapper is gated on this suite's own marker keys, so unrelated H3 graphs stay
 on the stock path.
 """
 
+import inspect
 import logging
 
 from .patch_utils import classify_callable
+from .release_utils import RELEASE_VERSION
 
 HC_INDEX = "h3_continuous_index"
 HC_AUDIO_END_FRAME = "h3_continuous_audio_end_frame"
@@ -16,6 +18,7 @@ LAYOUT_PATCH_MARKER = "_herrgotts_h3_infinite_layout_patch"
 
 _LOG = logging.getLogger("h3_continuous")
 _ORIGINAL_INIT = None
+_INSTALLED_WRAPPER = None
 _APPLIED = False
 _MM = None
 
@@ -191,9 +194,22 @@ def _run_self_test(mm, original_init, patched_init):
 
 
 def install_layout_patch():
-    global _ORIGINAL_INIT, _APPLIED, _MM
+    global _ORIGINAL_INIT, _INSTALLED_WRAPPER, _APPLIED, _MM
     if _APPLIED:
-        return True
+        # Verify against the LIVE callable: a module reload or another pack
+        # replacing PackedLayout.__init__ wholesale must not be masked by a
+        # stale in-process flag, or marked continuations would silently run
+        # through stock layout code.
+        status, _ = get_layout_patch_status()
+        if status is not None and status.state == "ours":
+            return True
+        _LOG.warning(
+            "h3_continuous: layout hook state lost (H3 module reloaded or replaced); re-validating"
+        )
+        _ORIGINAL_INIT = None
+        _INSTALLED_WRAPPER = None
+        _MM = None
+        _APPLIED = False
 
     status, err = get_layout_patch_status()
     if status is None:
@@ -212,52 +228,84 @@ def install_layout_patch():
         return False
 
     mm = _import_mm()
-    _MM = mm
-    _ORIGINAL_INIT = mm.PackedLayout.__init__
+    original_init = mm.PackedLayout.__init__
+    try:
+        sig = inspect.signature(original_init)
+    except (TypeError, ValueError) as exc:
+        _LOG.error(
+            "h3_continuous: cannot inspect PackedLayout.__init__ (%s). No layout patch was installed.",
+            exc,
+        )
+        return False
+    required = {"text_len", "latent_t", "keyframes", "refs", "frame_count"}
+    missing = required - set(sig.parameters)
+    if missing:
+        _LOG.error(
+            "h3_continuous: PackedLayout.__init__ no longer exposes expected parameters %s. "
+            "No layout patch was installed.", sorted(missing),
+        )
+        return False
 
-    def patched_init(self, text_len, latent_t, latent_h, latent_w, audio_t,
-                     keyframes=None, refs=None, frame_count=None):
-        _ORIGINAL_INIT(self, text_len, latent_t, latent_h, latent_w, audio_t,
-                       keyframes=keyframes, refs=refs, frame_count=frame_count)
+    def patched_init(self, *args, **kwargs):
+        # Forward verbatim so upstream additions to PackedLayout.__init__ keep
+        # working for every H3 graph; recover the arguments the marker fix-up
+        # needs by NAME so positional/keyword call styles both work.
+        original_init(self, *args, **kwargs)
+        bound = sig.bind(self, *args, **kwargs)
+        bound.apply_defaults()
+        ba = bound.arguments
+        keyframes = ba.get("keyframes")
+        refs = ba.get("refs")
         has_ours_kf = bool(keyframes) and any(HC_INDEX in k for k in keyframes)
         has_ours_audio = bool(refs) and any(HC_AUDIO_END_FRAME in r for r in refs)
         if has_ours_kf:
-            _fix_keyframes(mm, self, text_len, latent_t, frame_count, keyframes, refs)
+            _fix_keyframes(
+                mm, self, ba.get("text_len"), ba.get("latent_t"), ba.get("frame_count"),
+                keyframes, refs,
+            )
         if has_ours_audio:
-            _fix_audio(mm, self, text_len, refs)
+            _fix_audio(mm, self, ba.get("text_len"), refs)
         # No Herrgotts marker -> stock graph, returned exactly as built.
 
     setattr(patched_init, LAYOUT_PATCH_MARKER, True)
 
     try:
-        _run_self_test(mm, _ORIGINAL_INIT, patched_init)
+        _run_self_test(mm, original_init, patched_init)
     except Exception as exc:
         _LOG.error(
             "h3_continuous: live ComfyUI layout self-test FAILED (%s). "
             "No layout patch was installed.", exc,
         )
-        _ORIGINAL_INIT = None
-        _MM = None
         return False
 
     mm.PackedLayout.__init__ = patched_init
+    _ORIGINAL_INIT = original_init
+    _INSTALLED_WRAPPER = patched_init
+    _MM = mm
     _APPLIED = True
     _LOG.info(
-        "h3_continuous v1.2.1: lazy, marker-gated H3 layout patch installed on first continuation use"
+        "h3_continuous v%s: lazy, marker-gated H3 layout patch installed on first continuation use",
+        RELEASE_VERSION,
     )
     return True
 
 
 def uninstall_layout_patch_if_owned():
     """Best-effort rollback used only if paired patch installation fails."""
-    global _ORIGINAL_INIT, _APPLIED, _MM
-    if _MM is None or _ORIGINAL_INIT is None:
+    global _ORIGINAL_INIT, _INSTALLED_WRAPPER, _APPLIED, _MM
+    if _MM is None or _ORIGINAL_INIT is None or _INSTALLED_WRAPPER is None:
         return False
     current = getattr(getattr(_MM, "PackedLayout", None), "__init__", None)
-    if current is None or not getattr(current, LAYOUT_PATCH_MARKER, False):
+    if current is not _INSTALLED_WRAPPER:
+        # Someone layered/replaced the callable after us; restoring the original
+        # here would rip their hook out along with ours.
+        _LOG.warning(
+            "h3_continuous: layout hook is no longer the wrapper this suite installed; leaving it untouched"
+        )
         return False
     _MM.PackedLayout.__init__ = _ORIGINAL_INIT
     _ORIGINAL_INIT = None
+    _INSTALLED_WRAPPER = None
     _MM = None
     _APPLIED = False
     _LOG.info("h3_continuous: rolled back Herrgotts H3 layout patch")

@@ -22,6 +22,7 @@ from .patch_layout import HC_INDEX, HC_AUDIO_END_FRAME
 from .runtime_patches import ensure_h3_runtime_patches
 from .motion_analysis import analyze_freeze_tail, phase_aware_safety_from_confidence
 from .release_utils import (
+    RELEASE_VERSION,
     duration_to_requested_frames, normalize_alignment_mode, normalize_safety_mode,
     resolve_freeze_settings, stitch_trim_plan, apply_no_lock_fallback,
 )
@@ -72,6 +73,14 @@ def _streams_from_latent(latent):
     if video.ndim != 5 or audio.ndim != 4:
         raise ValueError(
             f"h3_continuous: unexpected H3 shapes video={tuple(video.shape)}, audio={tuple(audio.shape)}"
+        )
+    if int(video.shape[1]) != 24 or int(audio.shape[1]) != 32:
+        # A plain batched non-H3 latent also survives the unbind/ndim checks
+        # above; catch it here with an actionable message instead of failing
+        # deep inside the phase/audio math.
+        raise ValueError(
+            "h3_continuous: latent does not look like a MiniMax H3 AV latent "
+            f"(video channels {int(video.shape[1])}, audio channels {int(audio.shape[1])}; expected 24/32)"
         )
     return video, audio
 
@@ -206,6 +215,11 @@ class H3ContinuousContinue:
             raise ValueError(f"h3_continuous: unknown alignment_mode {alignment_mode!r}")
 
         prev_video, prev_audio = _streams_from_latent(previous_latent)
+        if int(prev_video.shape[0]) > 1:
+            _LOG.warning(
+                "h3_continuous: previous latent has batch size %s; only batch item 0 is continued",
+                int(prev_video.shape[0]),
+            )
         previous_frame_count = pixel_frames(prev_video.shape[2])
 
         # Resolve the desired cutoff. In phase-aware AUTO mode we deliberately
@@ -345,6 +359,12 @@ class H3ContinuousContinue:
         audio_context = prev_audio[:1, ..., a0:a1].clone()
         ref_audio_t = int(audio_context.shape[-1])
         actual_context_frames = int(sl.get("actual_context_frames", context_frames))
+        if actual_context_frames >= frame_count:
+            raise ValueError(
+                f"h3_continuous: continuation length {frame_count} frames does not exceed the reused "
+                f"context ({actual_context_frames} frames incl. phase extension); increase the "
+                "length/duration or choose a smaller context_frames"
+            )
         audio_end_frame = float(actual_context_frames) + float(end_error_steps) / FRAME_RESCALE
         refs = [{
             "kind": "audio",
@@ -461,14 +481,27 @@ class H3ContinuousSaveLatent:
         head_context_frames = max(0, int(head_context_frames or 0))
         metadata = {
             "format": "h3_continuous_av_v8",
-            "release_version": "1.2.1",
+            "release_version": RELEASE_VERSION,
             "fps": str(FPS),
             "frame_count": str(frame_count),
             "clip_index": str(int(clip_index)),
-            "head_context_frames": str(head_context_frames),
             "video_shape": json.dumps(list(video_cpu.shape)),
             "audio_shape": json.dumps(list(audio_cpu.shape)),
         }
+        head_note = str(head_context_frames)
+        if head_context_frames == 0 and int(clip_index) >= 2:
+            # A continuation clip always reuses context, so 0 means the
+            # actual_head_context_frames input was not connected. Omit the key
+            # so saved-chain stitching can fall back to the previous clip's
+            # handover metadata instead of baking a duplicated seam.
+            head_note = "MISSING (connect actual_head_context_frames)"
+            _LOG.warning(
+                "h3_continuous: clip %s saved without head_context_frames "
+                "(actual_head_context_frames not connected); saved-chain stitching will fall "
+                "back to the previous clip's handover metadata", int(clip_index)
+            )
+        else:
+            metadata["head_context_frames"] = str(head_context_frames)
         handover_summary = "no handover metadata"
         if isinstance(handover, dict) and handover.get("available"):
             analyzed_frames = int(handover.get("frame_count", frame_count))
@@ -494,10 +527,22 @@ class H3ContinuousSaveLatent:
                         f"effective tail {clean.get('landing_tail_frames')})"
                     )
 
-        st_save({"video": video_cpu, "audio": audio_cpu}, path, metadata=metadata)
+        # Atomic replace: an interrupted write must never destroy the previous
+        # accepted clip in this slot (it is the anchor of the whole chain).
+        tmp_path = path + ".tmp"
+        try:
+            st_save({"video": video_cpu, "audio": audio_cpu}, tmp_path, metadata=metadata)
+            os.replace(tmp_path, path)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
         info = (
             f"{frame_count} frames | video {tuple(video_cpu.shape)} | audio {tuple(audio_cpu.shape)} | "
-            f"head context {head_context_frames} | {handover_summary}"
+            f"head context {head_note} | {handover_summary}"
         )
         _LOG.info("h3_continuous: saved %s (%s)", path, info)
         return (path, info)
@@ -507,6 +552,7 @@ def _resolve_latent_path(path, clip_index):
     p = (path or "").strip().strip('"').strip("'")
     if not p:
         p = "h3_continuous"
+    idx = int(clip_index)
     candidates = [p, os.path.join(folder_paths.get_output_directory(), p)]
     for c in candidates:
         if os.path.isfile(c):
@@ -515,7 +561,6 @@ def _resolve_latent_path(path, clip_index):
             files = [os.path.join(c, f) for f in os.listdir(c) if f.endswith(".safetensors")]
             if not files:
                 raise FileNotFoundError(f"h3_continuous: no .safetensors files in {c}")
-            idx = int(clip_index)
             if idx > 0:
                 suffix = f"_{idx:05d}.safetensors"
                 fixed = [f for f in files if f.endswith(suffix)]
@@ -523,10 +568,21 @@ def _resolve_latent_path(path, clip_index):
                     raise FileNotFoundError(
                         f"h3_continuous: no fixed slot {idx} in {c} (expected *{suffix})"
                     )
-                return max(fixed, key=os.path.getmtime)
+                if len(fixed) > 1:
+                    names = sorted(os.path.basename(f) for f in fixed)
+                    raise ValueError(
+                        f"h3_continuous: multiple saved chains contain slot {idx} in {c}: {names}; "
+                        "use a Save-style prefix (e.g. h3_continuous/clip) or the exact file path"
+                    )
+                return fixed[0]
             return max(files, key=os.path.getmtime)
+        # Save-style prefix: h3_continuous/clip resolves to .../clip_00001.safetensors,
+        # matching what H3ContinuousSaveLatent writes for fixed slots.
+        if idx > 0 and os.path.isfile(f"{c}_{idx:05d}.safetensors"):
+            return f"{c}_{idx:05d}.safetensors"
     raise FileNotFoundError(
-        f"h3_continuous: {p!r} is neither a file nor a folder (also tried ComfyUI output directory)"
+        f"h3_continuous: {p!r} is neither a file, a folder, nor a saved-chain prefix "
+        "(also tried relative to the ComfyUI output directory)"
     )
 
 
@@ -546,6 +602,19 @@ class H3ContinuousLoadLatent:
     FUNCTION = "load"
     CATEGORY = "H3 Continuous"
     DESCRIPTION = "Load a complete H3 AV latent and its optional saved automatic handover metadata."
+
+    @classmethod
+    def IS_CHANGED(cls, latent_path, clip_index=1):
+        # The same widget values can point at different bytes: fixed slots are
+        # overwritten on retry and clip_index 0 follows the newest file. Key the
+        # execution cache on the resolved file so a re-rendered clip is never
+        # served stale from ComfyUI's cache.
+        try:
+            path = _resolve_latent_path(latent_path, clip_index)
+            stat = os.stat(path)
+            return f"{path}|{stat.st_mtime_ns}|{stat.st_size}"
+        except Exception:
+            return float("nan")  # unresolvable: always re-run so load() reports the real error
 
     def load(self, latent_path, clip_index=1):
         path = _resolve_latent_path(latent_path, clip_index)
@@ -1065,6 +1134,13 @@ class H3ContinuousContinueV11(H3ContinuousContinueV1):
 
 def _format_handover_status_v11(result):
     if result["freeze_detected"]:
+        early_freeze_warning = ""
+        if result.get("context_contains_locked_frames"):
+            early_freeze_warning = (
+                " | WARNING: the clip freezes so early that the reused context overlaps the "
+                "detected lock; the next clip would continue from frozen history - consider "
+                "re-rendering this clip instead of continuing"
+            )
         return (
             f"FINAL-FRAME LOCK detected | starts frame {result['freeze_start_frame']} | "
             f"locked frames {result['trailing_locked_frames']} | "
@@ -1088,6 +1164,7 @@ def _format_handover_status_v11(result):
             f"({result['residual_static_transitions']}/{result['residual_total_transitions']}; "
             f"outliers {result['residual_motion_outliers']}, max streak {result['residual_max_consecutive_outliers']}) | "
             f"confidence {result['confidence']:.3f}"
+            + early_freeze_warning
         )
 
     fallback = ""
@@ -1147,6 +1224,11 @@ class H3ContinuousAnalyzeHandoverV11(H3ContinuousAnalyzeHandoverV1):
                     "tooltip": "Custom only. fixed is recommended; adaptive (Legacy) can reduce safety at high confidence.",
                     "advanced": True,
                 })
+            elif name == "context_frames":
+                # Live in EVERY preset (presets do not override it, and it must
+                # match the Continue node's context_frames), so it is neither
+                # advanced nor Custom-only.
+                ordered[name] = spec
             else:
                 kind, opts = spec
                 opts = dict(opts)
@@ -1224,7 +1306,7 @@ class H3ContinuousAnalyzeHandoverV11(H3ContinuousAnalyzeHandoverV1):
             result, freeze_hold=effective["freeze_hold"], context_frames=context_frames
         )
         result["release_preset"] = preset_id
-        result["release_version"] = "1.2.1"
+        result["release_version"] = RELEASE_VERSION
         result["version"] = max(int(result.get("version", 0)), 10)
         status = _format_handover_status_v11(result)
         label = {"balanced": "Balanced", "motion_safe": "Motion Safe", "custom": "Custom"}[preset_id]
@@ -1535,6 +1617,27 @@ class H3ContinuousStitchSavedChainV11:
     CATEGORY = "Herrgotts H3 Infinite Continuation Suite"
     DESCRIPTION = "v1.2 memory-bounded saved-chain stitcher. Uses Safe Tail Bridge plus short context-aligned video/audio seam smoothing and encodes directly to MP4 so peak memory does not grow with chain length."
 
+    @classmethod
+    def IS_CHANGED(cls, video_vae, audio_vae, latent_prefix="h3_continuous/clip",
+                   first_clip=1, last_clip=0, **kwargs):
+        # The clip set lives on disk: slots get overwritten on retry and
+        # last_clip=0 grows as new clips are saved, all without any widget
+        # change. Fingerprint the resolved files so re-queueing actually
+        # re-stitches instead of returning the cached old MP4 path.
+        try:
+            first = int(first_clip)
+            last = int(last_clip)
+            if last == 0:
+                last = _discover_saved_last_clip(latent_prefix, first)
+            parts = []
+            for i in range(first, last + 1):
+                p = _saved_chain_file(latent_prefix, i)
+                stat = os.stat(p)
+                parts.append(f"{p}|{stat.st_mtime_ns}|{stat.st_size}")
+            return ";".join(parts)
+        except Exception:
+            return float("nan")  # unresolvable: always re-run so stitch() reports the real error
+
     def stitch(self, video_vae, audio_vae, latent_prefix="h3_continuous/clip",
                first_clip=1, last_clip=0, filename_prefix="video/Herrgotts_H3_Infinite_Stitched",
                video_crossfade_frames=4, audio_crossfade_ms=15.0, luminance_match=False,
@@ -1659,7 +1762,7 @@ class H3ContinuousStitchSavedChainV11:
                         raise ValueError(f"Saved Chain Stitch currently supports mono/stereo audio, got {channels} channels")
                     layout = "mono" if channels == 1 else "stereo"
                     output = av.open(out_path, mode="w", options={"movflags": "use_metadata_tags+faststart"})
-                    output.metadata["herrgotts_h3_infinite_version"] = "1.2.1"
+                    output.metadata["herrgotts_h3_infinite_version"] = RELEASE_VERSION
                     output.metadata["clip_range"] = f"{first}-{last}"
                     output.metadata["video_crossfade_frames"] = str(requested_vfade)
                     output.metadata["audio_crossfade_ms"] = str(requested_afade_ms)
@@ -1689,6 +1792,10 @@ class H3ContinuousStitchSavedChainV11:
                 # from the previous clip and skip the same N early video frames
                 # here. Audio keeps its already-tested boundary unchanged.
                 incoming_bridge = min(incoming_bridge, max(0, end - head - 1))
+                if pending_bridge_video is not None and int(pending_bridge_video.shape[0]) > incoming_bridge:
+                    # The seam writes every held bridge frame; drop the ones the
+                    # clamp removed so video and audio timelines stay equal.
+                    pending_bridge_video = pending_bridge_video[:incoming_bridge]
                 video_head = head + incoming_bridge
                 body_images = images[video_head:end]
                 body_audio = frame_trimmed_audio(audio, frame_count, head, tail, FPS)["waveform"]
@@ -1706,14 +1813,18 @@ class H3ContinuousStitchSavedChainV11:
                 # Prepare up to 1-2 safe rendered pixels that latent phase
                 # alignment had to discard. They are kept only until the next
                 # video seam and never affect audio timing.
-                future_bridge_video = images[:0].detach().cpu()
+                # .clone() the held boundary buffers: on a CPU intermediate
+                # device .detach().cpu() is a no-op view that would keep the
+                # ENTIRE decoded clip's storage alive across the loop, breaking
+                # the memory-bounded design.
+                future_bridge_video = images[:0].detach().cpu().clone()
                 future_bridge_stats = safe_tail_bridge_plan(handover, requested_bridge_max)
                 future_bridge_count = 0
                 if not is_final and int(future_bridge_stats.get("safe_tail_bridge_frames", 0)) > 0:
                     future_bridge_video, future_bridge_stats = extract_safe_tail_bridge_images(
                         images, handover, requested_bridge_max
                     )
-                    future_bridge_video = future_bridge_video.detach().cpu()
+                    future_bridge_video = future_bridge_video.detach().cpu().clone()
                     future_bridge_count = int(future_bridge_video.shape[0])
 
                 if offset == 0:
@@ -1724,10 +1835,10 @@ class H3ContinuousStitchSavedChainV11:
                         an_req = int(round(requested_afade_ms / 1000.0 * sr))
                         an = min(an_req, int(body_audio.shape[-1]))
                         write_video(body_images[:-vn] if vn else body_images)
-                        pending_video = body_images[-vn:].detach().cpu() if vn else body_images[:0].detach().cpu()
+                        pending_video = (body_images[-vn:] if vn else body_images[:0]).detach().cpu().clone()
                         pending_bridge_video = future_bridge_video
                         write_audio(body_audio[..., :-an] if an else body_audio)
-                        pending_audio = body_audio[..., -an:].detach().cpu() if an else body_audio[..., :0].detach().cpu()
+                        pending_audio = (body_audio[..., -an:] if an else body_audio[..., :0]).detach().cpu().clone()
                     else:
                         write_video(body_images)
                         write_audio(body_audio)
@@ -1796,10 +1907,10 @@ class H3ContinuousStitchSavedChainV11:
                         hold_a_req = int(round(requested_afade_ms / 1000.0 * sr))
                         hold_a = min(hold_a_req, int(body_audio.shape[-1]))
                         write_video(body_images[:-hold_v] if hold_v else body_images)
-                        pending_video = body_images[-hold_v:].detach().cpu() if hold_v else body_images[:0].detach().cpu()
+                        pending_video = (body_images[-hold_v:] if hold_v else body_images[:0]).detach().cpu().clone()
                         pending_bridge_video = future_bridge_video
                         write_audio(body_audio[..., :-hold_a] if hold_a else body_audio)
-                        pending_audio = body_audio[..., -hold_a:].detach().cpu() if hold_a else body_audio[..., :0].detach().cpu()
+                        pending_audio = (body_audio[..., -hold_a:] if hold_a else body_audio[..., :0]).detach().cpu().clone()
                     else:
                         write_video(body_images)
                         write_audio(body_audio)
@@ -1833,6 +1944,12 @@ class H3ContinuousStitchSavedChainV11:
             if pending_audio is not None:
                 write_audio(pending_audio)
 
+            if video_written != logical_frames:
+                # Inside the cleanup block so a desynced .mp4 never survives.
+                raise ValueError(
+                    f"saved-chain video timeline mismatch after Safe Tail Bridge: wrote {video_written} frames, expected {logical_frames}"
+                )
+
             for packet in vstream.encode(None):
                 output.mux(packet)
             for packet in astream.encode(None):
@@ -1852,10 +1969,6 @@ class H3ContinuousStitchSavedChainV11:
                     pass
             raise
 
-        if video_written != logical_frames:
-            raise ValueError(
-                f"saved-chain video timeline mismatch after Safe Tail Bridge: wrote {video_written} frames, expected {logical_frames}"
-            )
         expected_audio_samples = int(round(video_written / float(FPS) * sr)) if sr else 0
         drift = audio_written - expected_audio_samples
         info = (

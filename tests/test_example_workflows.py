@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 
@@ -9,6 +10,14 @@ EXAMPLES = ROOT / "examples"
 def _load_examples():
     for path in sorted(EXAMPLES.glob("*.json")):
         yield path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def _project_version():
+    """The authoritative release version from pyproject.toml."""
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    assert match, "pyproject.toml has no [project] version"
+    return match.group(1)
 
 
 def test_example_workflows_use_correct_h3_vae_files():
@@ -113,6 +122,7 @@ def test_saved_chain_and_showcase_document_safe_tail_bridge_and_audio_defaults()
 
 def test_all_suite_nodes_embed_registry_metadata_for_missing_node_resolution():
     registry_id = "herrgotts-h3-infinite-continuation-suite"
+    version = _project_version()
     node_list = json.loads((ROOT / "node_list.json").read_text(encoding="utf-8"))
     suite_types = set(node_list)
     seen = set()
@@ -124,7 +134,7 @@ def test_all_suite_nodes_embed_registry_metadata_for_missing_node_resolution():
             seen.add(node_type)
             props = node.get("properties") or {}
             assert props.get("cnr_id") == registry_id, (path.name, node_type, props)
-            assert props.get("ver") == "1.2.1", (path.name, node_type, props)
+            assert props.get("ver") == version, (path.name, node_type, props)
             assert props.get("Node name for S&R") == node_type, (path.name, node_type, props)
     # Every release-facing/persistence node used by the shipped workflows should be covered.
     expected_used = {
@@ -140,18 +150,63 @@ def test_all_suite_nodes_embed_registry_metadata_for_missing_node_resolution():
     assert expected_used <= seen
 
 
+def _top_level_dict_keys(tree, name):
+    import ast
+
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == name for target in statement.targets):
+            assert isinstance(statement.value, ast.Dict)
+            return {key.value for key in statement.value.keys if isinstance(key, ast.Constant)}
+    return None
+
+
 def test_node_list_matches_all_registered_node_class_mapping_keys():
     import ast
 
     tree = ast.parse((ROOT / "nodes.py").read_text(encoding="utf-8"))
-    mapping_keys = None
-    for statement in tree.body:
-        if not isinstance(statement, ast.Assign):
-            continue
-        if any(isinstance(target, ast.Name) and target.id == "NODE_CLASS_MAPPINGS" for target in statement.targets):
-            assert isinstance(statement.value, ast.Dict)
-            mapping_keys = {key.value for key in statement.value.keys if isinstance(key, ast.Constant)}
-            break
+    mapping_keys = _top_level_dict_keys(tree, "NODE_CLASS_MAPPINGS")
     assert mapping_keys is not None
     node_list = json.loads((ROOT / "node_list.json").read_text(encoding="utf-8"))
     assert set(node_list) == mapping_keys
+
+
+def test_every_registered_node_has_a_display_name_and_no_orphans():
+    import ast
+
+    tree = ast.parse((ROOT / "nodes.py").read_text(encoding="utf-8"))
+    mapping_keys = _top_level_dict_keys(tree, "NODE_CLASS_MAPPINGS")
+    display_keys = _top_level_dict_keys(tree, "NODE_DISPLAY_NAME_MAPPINGS")
+    assert mapping_keys is not None
+    assert display_keys is not None
+    assert display_keys == mapping_keys
+
+
+def test_example_widgets_values_lengths_match_current_node_definitions():
+    # widgets_values are POSITIONAL: adding/removing/reordering a widget in
+    # INPUT_TYPES silently scrambles every saved workflow. This map is an
+    # intentional tripwire - update it (and the shipped examples) together with
+    # any INPUT_TYPES change.
+    expected_widget_counts = {
+        "H3ContinuousStartV11": 5,
+        "H3ContinuousContinueV11": 9,
+        "H3ContinuousAnalyzeHandoverV11": 18,
+        "H3ContinuousStitchOutputV11": 1,
+        "H3ContinuousSeamlessJoinV11": 7,
+        "H3ContinuousStitchSavedChainV11": 11,
+        "H3ContinuousSaveLatent": 2,
+        "H3ContinuousLoadLatent": 2,
+    }
+    seen = set()
+    for path, workflow in _load_examples():
+        for node in workflow.get("nodes", []):
+            node_type = node.get("type")
+            if node_type not in expected_widget_counts:
+                continue
+            seen.add(node_type)
+            values = node.get("widgets_values") or []
+            assert len(values) == expected_widget_counts[node_type], (
+                path.name, node_type, values,
+            )
+    assert seen == set(expected_widget_counts)

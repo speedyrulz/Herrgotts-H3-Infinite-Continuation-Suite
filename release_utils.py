@@ -15,6 +15,11 @@ except ImportError:  # direct test import from package directory
     from latent_math import FPS, video_latent_t, phase_aligned_extended_context_slice, phase_aware_context_slice, snap_landing_tail
 
 
+# Single source of truth for the release version written into saved latents,
+# MP4 metadata, and log lines. Must match [project].version in pyproject.toml
+# (pinned by tests/test_release_utils.py).
+RELEASE_VERSION = "1.2.1"
+
 BALANCED_FREEZE_PRESET = {
     "analysis_window": 72,
     "freeze_hold": 8,

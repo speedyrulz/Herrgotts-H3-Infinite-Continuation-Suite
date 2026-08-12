@@ -7,6 +7,7 @@ from latent_math import temporal_shape
 from release_utils import (
     BALANCED_FREEZE_PRESET,
     MOTION_SAFE_FREEZE_PRESET,
+    RELEASE_VERSION,
     duration_to_requested_frames,
     normalize_alignment_mode,
     normalize_safety_mode,
@@ -14,6 +15,17 @@ from release_utils import (
     stitch_trim_plan,
     apply_no_lock_fallback,
 )
+
+
+def test_release_version_matches_pyproject():
+    # RELEASE_VERSION is the single constant written into saved latents, MP4
+    # metadata, and logs; it must never drift from the published version.
+    import re
+
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    assert match, "pyproject.toml has no [project] version"
+    assert RELEASE_VERSION == match.group(1)
 
 
 def test_duration_10_seconds_matches_h3_243_frame_clip():

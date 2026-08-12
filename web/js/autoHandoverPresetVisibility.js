@@ -1,7 +1,9 @@
 import { app } from "../../scripts/app.js";
 
 const TARGET_CLASS = "H3ContinuousAnalyzeHandoverV11";
-const ALWAYS_VISIBLE = new Set(["preset"]);
+// context_frames is live in EVERY preset (presets do not override it and it
+// must match the Continue node), so it stays visible alongside the preset.
+const ALWAYS_VISIBLE = new Set(["preset", "context_frames"]);
 
 function targetNames(node) {
     return new Set([
@@ -62,6 +64,8 @@ function setPresetVisibility(node) {
     if (!preset) return;
 
     const showCustom = String(preset.value ?? "Balanced").trim().toLowerCase() === "custom";
+    const previousShowCustom = node.__herrgottsPresetShowCustom;
+    node.__herrgottsPresetShowCustom = showCustom;
 
     // Use both current ComfyUI mechanisms deliberately:
     // 1) `advanced` + `node.showAdvanced` is the native Advanced Parameters UI.
@@ -78,7 +82,15 @@ function setPresetVisibility(node) {
         widget.hidden = !showCustom;
     }
 
-    refreshNodeLayout(node);
+    // Resize only when visibility actually changed. The handlers re-run this on
+    // every load/configure pass, and an unconditional height snap would discard
+    // the node size saved in the workflow. An initial all-visible (Custom) pass
+    // hides nothing, so it needs no resize either.
+    const isTransition = previousShowCustom !== showCustom
+        && !(previousShowCustom === undefined && showCustom);
+    if (isTransition) {
+        refreshNodeLayout(node);
+    }
 }
 
 function installPresetCallback(node) {

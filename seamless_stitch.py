@@ -72,8 +72,10 @@ def estimate_luminance_gain(previous_context: torch.Tensor, next_context: torch.
         }
 
     # 4x spatial subsampling keeps the estimator cheap even for 1344x768 clips.
-    prev_luma = _rgb_luminance(previous_context)[:, ::4, ::4]
-    next_luma = _rgb_luminance(next_context.to(previous_context.device))[:, ::4, ::4]
+    # Subsample BEFORE the float conversion/luminance math so only 1/16 of the
+    # pixels are ever materialized; the selected pixel set is identical.
+    prev_luma = _rgb_luminance(previous_context[:, ::4, ::4])
+    next_luma = _rgb_luminance(next_context[:, ::4, ::4].to(previous_context.device))
     ratios = []
     for i in range(frames):
         a = prev_luma[i]
@@ -316,6 +318,7 @@ def context_aligned_video_join(previous_images: torch.Tensor, next_images: torch
         "luminance_fade_frames": 0,
     }
     gain = 1.0
+    next_body_parts = (next_body,)
     if bool(luminance_match) and head > 0 and int(previous_images.shape[0]) > 0:
         analysis_n = min(LUMINANCE_ANALYSIS_FRAMES, head, int(previous_images.shape[0]))
         measured = estimate_luminance_gain(
@@ -325,11 +328,16 @@ def context_aligned_video_join(previous_images: torch.Tensor, next_images: torch
         )
         luma_stats.update(measured)
         gain = float(measured["luminance_applied_gain"])
-        next_body, faded = apply_luminance_gain_fade(next_body, gain, int(luminance_fade_frames))
+        # Fade only the affected boundary frames. Cloning the whole next body to
+        # scale a handful of frames would transiently double the join's memory.
+        fade_n = min(max(0, int(luminance_fade_frames)), int(next_body.shape[0]))
+        faded_head, faded = apply_luminance_gain_fade(next_body[:fade_n], gain, fade_n)
+        if faded:
+            next_body_parts = (faded_head, next_body[faded:])
         luma_stats["luminance_fade_frames"] = faded
 
     if n <= 0:
-        out = torch.cat((previous_images, next_body), dim=0)
+        out = torch.cat((previous_images, *next_body_parts), dim=0)
         return out, {
             "video_crossfade_frames": 0,
             "next_kept_frames": int(next_body.shape[0]),
@@ -342,7 +350,7 @@ def context_aligned_video_join(previous_images: torch.Tensor, next_images: torch
     if bool(luminance_match):
         next_overlap = apply_rgb_gain(next_overlap, gain)
     blended = blend_video_overlap(previous_tail, next_overlap)
-    out = torch.cat((previous_prefix, blended, next_body), dim=0)
+    out = torch.cat((previous_prefix, blended, *next_body_parts), dim=0)
     return out, {
         "video_crossfade_frames": n,
         "next_kept_frames": int(next_body.shape[0]),
@@ -432,11 +440,19 @@ def resolve_saved_head_context(metadata: dict[str, Any], clip_index: int,
         return 0, "clip-1"
     raw = metadata.get("head_context_frames")
     if raw not in (None, ""):
-        return max(0, int(raw)), "saved metadata"
+        head = max(0, int(raw))
+        # A continuation clip always reuses at least 5 context frames, so a
+        # stored 0 means actual_head_context_frames was never connected when the
+        # clip was saved. Treat it like missing metadata instead of silently
+        # replaying the duplicated context head at the stitched seam.
+        if head > 0:
+            return head, "saved metadata"
     if isinstance(previous_handover, dict):
         for key in ("phase_aligned_context_frames", "phase_aware_context_frames"):
             if previous_handover.get(key) is not None:
                 return max(0, int(previous_handover[key])), f"previous handover {key}"
     raise ValueError(
-        f"clip {clip_index} has no saved head_context_frames and the previous clip has no usable context metadata"
+        f"clip {clip_index} has no usable saved head_context_frames (missing or 0) and the previous "
+        "clip has no usable context metadata; connect actual_head_context_frames to Save AV Latent "
+        "and re-save this clip"
     )
